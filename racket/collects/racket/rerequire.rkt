@@ -2,7 +2,8 @@
 
 (require syntax/modcode
          syntax/modresolve
-         racket/path)
+         racket/path
+         compiler/compilation-path)
 
 (provide dynamic-rerequire)
 
@@ -56,6 +57,24 @@
                           (parameterize ([compile-enforce-module-constants #f])
                             (compile e)))
                         (lambda (ext loader?) (load-extension ext) #f)
+                        #:choose
+                        (lambda (src zo so)
+                          (let ([src-exists? (file-exists? src)]
+                                [zo-exists? (file-exists? zo)])
+                            (cond [(and src-exists? zo-exists?
+                                        (eq? (use-compiled-file-check) 'exists))
+                                   'zo]
+                                  [(and src-exists?
+                                        zo-exists?
+                                        (>= (file-or-directory-modify-seconds zo #f
+                                                                              (lambda () -inf.0))
+                                            (file-or-directory-modify-seconds src #f
+                                                                              (lambda () -inf.0))))
+                                   'zo]
+                                  [(and src-exists? zo-exists?) 'src]
+                                  [zo-exists? 'zo]
+                                  [src-exists? 'src]
+                                  [else #f])))
                         #:notify notify)]
                  [dir  (or (current-load-relative-directory) (current-directory))]
                  [path (path->complete-path path dir)]
@@ -87,7 +106,21 @@
         ;; Not a module, or a submodule that we shouldn't load from source:
         (begin (notify path) (orig path name)))))
 
+(define (maybe-max val val-or-false)
+  (if val-or-false (max val val-or-false) val))
+
 (define (get-timestamp path)
+  (let*-values ([(ts src-path) (get-timestamp/src path)]
+                [(zo) (get-compilation-bytecode-file src-path)]
+                [(zo) (and (file-exists? zo) zo)]
+                [(ts/zo) (and zo (file-or-directory-modify-seconds zo #f (lambda () #f)))])
+    (values
+     (if (eq? (use-compiled-file-check) 'exists)
+         (or ts/zo ts)
+         (maybe-max ts ts/zo))
+     src-path)))
+
+(define (get-timestamp/src path)
   (let ([ts (file-or-directory-modify-seconds path #f (lambda () #f))])
     (if ts
         (values ts path)

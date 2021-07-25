@@ -8,14 +8,13 @@
 
 (use-compiled-file-check 'modify-seconds) ; in case it isn't
 
-
 (define (member/compiled path changed-paths)
   (member (get-compilation-bytecode-file path) changed-paths))
 
 
 (define (compile-file path)
-  (parameterize ([current-namespace (make-base-empty-namespace)] ;; omits deps otherwise???
-                 [compile-enforce-module-constants #f])          ;; no reloading allowed otherwise
+  (parameterize ([current-namespace (make-base-empty-namespace)]
+                 [compile-enforce-module-constants #f]) ;; no reloading allowed otherwise
     (managed-compile-zo path)))
 
 (define-syntax (do-test stx)
@@ -270,7 +269,73 @@ CODE
 (define (proc) 2)
 CODE
    path1)
-
   (let-values ([(proc-b proc-c) (reload)])
    (check-equal? (proc-b) 2)
    (check-equal? (proc-c) 2)))
+
+
+(test-case
+ "(use-compiled-file-check 'exists) check"
+
+ (use-compiled-file-check 'exists) ; this test makes sure that if this is set, it won't reload
+ ; modified files if their .zo hasn't changed
+
+ (define dir (make-temporary-file "rereq-~a" 'directory))
+ (define zero-path (build-path dir "zero.rkt"))
+ (define one-path (build-path dir "one.rkt"))
+
+ (define (create-zero recreate?)
+   (display-to-file
+    (string-append
+     "#lang racket/base\n"
+     (format "(require (file ~v))"
+             (path->string one-path))
+     "(provide proc)")
+    zero-path
+    #:exists 'replace)
+   (when recreate? (sleep 1)) ; to make sure mod time changes so rerequire notices it
+   (file-or-directory-modify-seconds
+    zero-path
+    (current-seconds)))
+
+ (define (create-one value recreate?)
+   (display-to-file
+    (string-append
+     "#lang racket/base\n"
+     "(provide proc)\n"
+     (format "(define (proc) ~v)\n" value))
+    one-path
+    #:exists 'replace)
+   (when recreate? (sleep 1)) ; to make sure mod time changes so rerequire notices it
+   (file-or-directory-modify-seconds
+    one-path
+    (current-seconds)))
+
+ (create-zero #f)
+ (create-one "foo" #f)
+ (compile-file zero-path)
+ (create-zero #t)
+ ;; at this point, zero and one have .zo, and zero.rkt is newer than its .zo
+
+ ;; because of use-compiled-file-checkc, the newer .rkt should be ignored
+ (define loaded-files/initial (dynamic-rerequire zero-path #:verbosity 'none))
+ (check-not-false
+  (and (member/compiled zero-path loaded-files/initial) ; both loaded from .zo
+       (member/compiled one-path loaded-files/initial)))
+ (check-equal? ((dynamic-require zero-path 'proc)) "foo") ; just in case
+
+ ;; now both are newer than their .zo, but both should still load from .zo
+ (create-one "zam" #t)
+ (define loaded-files/reload (dynamic-rerequire zero-path #:verbosity 'none))
+ (check-eq? loaded-files/reload null) ; still no reloads
+ (check-equal? ((dynamic-require zero-path 'proc)) "foo") ; just in case
+
+ (compile-file one-path)
+
+ ; now there's a newer zo so reload should trigger on both files
+ (define loaded-files/rereload (dynamic-rerequire zero-path #:verbosity 'none))
+ (check-not-false
+  (and (member/compiled zero-path loaded-files/rereload) ;; still prefers the .zo
+       (member/compiled one-path loaded-files/rereload)))
+
+(check-equal? ((dynamic-require zero-path 'proc)) "zam"))
