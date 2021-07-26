@@ -26,9 +26,11 @@
 
 (define (date>=? a bm)
   (and a
-       (let ([am (with-handlers ([exn:fail:filesystem? (lambda (x) #f)])
-                   (file-or-directory-modify-seconds a))])
-         (and am (if bm (>= am bm) #t)))))
+       (let ([am (file-or-directory-modify-seconds a #f (lambda () #f))])
+         (and am (if bm
+                     (or (eq? (use-compiled-file-check) 'exists)
+                         (>= am bm))
+                     #t)))))
 
 (define (read-one orig-path path src? read-src-syntax)
   (define p ((moddep-current-open-input-file) path))

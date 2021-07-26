@@ -68,6 +68,10 @@ are ignored, unless only a native-code non-@tt{_loader} version exists
 (i.e., @racket[path] itself does not exist). A @tt{_loader} extension
 is selected a last resort.
 
+If @racket[use-compiled-file-check] is set to @racket['exists] then
+the @filepath{.zo} version is used even if it is not newer than
+@racket[path] itself.
+
 If an extension is preferred or is the only file that exists, it is
 supplied to @racket[ext-proc] when @racket[ext-proc] is @racket[#f],
 or an exception is raised (to report that an extension file cannot be
