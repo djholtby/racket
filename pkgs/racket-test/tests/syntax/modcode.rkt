@@ -18,8 +18,8 @@
   (unless (equal? expect val)
     (error 'fail "at (apply ~s '~s): ~e is not expected: ~e" proc args val expect)))
 
-(define (try file.sfx src? zo? so?)
-  (printf "trying ~s\n" (list file.sfx src? zo? so?))
+(define (try file.sfx src? zo? so? [exists-check #f])
+  (printf "trying ~s\n" (list file.sfx src? zo? so? exists-check))
   (define file.zo
     (let-values ([(base name dir?) (split-path file.sfx)])
       (build-path base compiled-subdir (path-add-suffix name #".zo"))))
@@ -32,84 +32,93 @@
   (dynamic-wind
    (lambda () (void))
    (lambda ()
-     (when src?
-       (call-with-output-file*
-        file.sfx
-        (lambda (o)
-          (write '(module file racket/base 
-                    10
-                    (module inner racket/base 11))
-                 o))))
-     (when zo?
-       (call-with-output-file* 
-        file.zo
-        (lambda (o)
-          (write (parameterize ([current-namespace ns])
-                   (compile '(module file racket/base 
-                               12
-                               (module inner racket/base 13))))
-                 o))))
-     (define (check-name name code)
-       (test name module-compiled-name code))
-     (define-values (m-path m-type)
-       (get-module-path file.sfx
-                        #:choose (lambda (src zo so)
-                                   (test src? file-exists? src)
-                                   (test zo? file-exists? zo)
-                                   (test so? file-exists? so)
-                                   #f)))
-     (test
-       (cond
-         [zo? (list file.zo 'zo)]
-         [so? (list file.so 'so)]
-         [else (list file.sfx 'src)])
-       list m-path m-type)
-     (check-name
-      'file
-      (get-module-code file.sfx
-                       #:choose (lambda (src zo so)
-                                  (test src? file-exists? src)
-                                  (test zo? file-exists? zo)
-                                  (test so? file-exists? so)
-                                  #f)))
-     (define-values (sm-path sm-type)
-       (get-module-path file.sfx
-                        #:submodule? #t
-                        #:choose (lambda (src zo so)
-                                   (test src? file-exists? src)
-                                   (test zo? file-exists? zo)
-                                   (test so? file-exists? so)
-                                   #f)))
-     (test
-       (cond
-         [zo? (list file.zo 'zo)]
-         [else (list file.sfx 'src)])
-       list sm-path sm-type)
-     (check-name
-      '(file inner)
-      (get-module-code file.sfx
-                       #:submodule-path '(inner)
-                       #:choose (lambda (src zo so)
-                                  (test src? file-exists? src)
-                                  (test zo? file-exists? zo)
-                                  (test so? file-exists? so)
-                                  #f)))
-     ;; test calling functions with path-strings instead of paths
-     (let ([== (lambda (x) x)]
-           [roots '("compiled" same)]
-           [to-list (lambda (thunk) (call-with-values thunk list))])
+     (parameterize ([use-compiled-file-check (or exists-check 'modify-seconds)])
+       (when src?
+         (call-with-output-file*
+          file.sfx
+          (lambda (o)
+            (write '(module file racket/base 
+                      10
+                      (module inner racket/base 11))
+                   o))))
+       (when zo?
+         (call-with-output-file* 
+          file.zo
+          (lambda (o)
+            (write (parameterize ([current-namespace ns])
+                     (compile '(module file racket/base 
+                                 12
+                                 (module inner racket/base 13))))
+                   o))))
+
+       (when (and src? zo? exists-check)
+         (file-or-directory-modify-seconds file.zo
+                                           (sub1 (file-or-directory-modify-seconds file.sfx))))
+     
+       (define (check-name name code)
+         (test name module-compiled-name code))
+       (define-values (m-path m-type)
+         (get-module-path file.sfx
+                          #:choose (lambda (src zo so)
+                                     (test src? file-exists? src)
+                                     (test zo? file-exists? zo)
+                                     (test so? file-exists? so)
+                                     #f)))
        (test
-        (module-compiled-name (get-module-code file.sfx #:roots roots))
-        module-compiled-name
-        (get-module-code (path->string file.sfx)))
+        (cond
+          [(and zo?
+                (not (eq? exists-check 'modify-seconds))) (list file.zo 'zo)]
+          [so? (list file.so 'so)]
+          [else (list file.sfx 'src)])
+        list m-path m-type)
+       (check-name
+        'file
+        (get-module-code file.sfx
+                         #:choose (lambda (src zo so)
+                                    (test src? file-exists? src)
+                                    (test zo? file-exists? zo)
+                                    (test so? file-exists? so)
+                                    #f)))
+       (define-values (sm-path sm-type)
+         (get-module-path file.sfx
+                          #:submodule? #t
+                          #:choose (lambda (src zo so)
+                                     (test src? file-exists? src)
+                                     (test zo? file-exists? zo)
+                                     (test so? file-exists? so)
+                                     #f)))
        (test
-        (to-list (lambda () (get-module-path file.sfx #:roots roots)))
-        ==
-        (to-list (lambda () (get-module-path (path->string file.sfx) #:roots roots))))
-       (test
-        (get-metadata-path file.sfx #:roots roots)
-        ==
-        (get-metadata-path (path->string file.sfx) #:roots roots)))
+        (cond
+          [(and zo?
+                (not (eq? exists-check 'modify-seconds)))
+           (list file.zo 'zo)]
+          [else (list file.sfx 'src)])
+        list sm-path sm-type)
+       (check-name
+        '(file inner)
+        (get-module-code file.sfx
+                         #:submodule-path '(inner)
+                         #:choose (lambda (src zo so)
+                                    (test src? file-exists? src)
+                                    (test zo? file-exists? zo)
+                                    (test so? file-exists? so)
+                                    #f)))
+       ;; test calling functions with path-strings instead of paths
+       (let ([== (lambda (x) x)]
+             [roots '("compiled" same)]
+             [to-list (lambda (thunk) (call-with-values thunk list))])
+         (test
+          (module-compiled-name (get-module-code file.sfx #:roots roots))
+          module-compiled-name
+          (get-module-code (path->string file.sfx)))
+         (test
+          (to-list (lambda () (get-module-path file.sfx #:roots roots)))
+          ==
+          (to-list (lambda () (get-module-path (path->string file.sfx) #:roots roots))))
+         (test
+          (get-metadata-path file.sfx #:roots roots)
+          ==
+          (get-metadata-path (path->string file.sfx) #:roots roots))))
      (void))
    (lambda ()
      (when src? (delete-file file.sfx))
@@ -121,5 +130,10 @@
 (try file.ss #t #f #f)
 (try file.ss #t #t #f)
 (try file.ss #f #t #f)
+
+(try file.rkt #t #t #f 'exists)
+(try file.rkt #t #t #f 'modify-seconds)
+(try file.ss #t #t #f 'exists)
+(try file.ss #t #t #f 'modify-seconds)
 
 (delete-directory/files compiled-dir)
